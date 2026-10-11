@@ -10,6 +10,7 @@ from hal.drivers.motors.contact_profile import LAG_PREFIX, ContactProfile, Passi
 from hal.drivers.motors.hold_profile import CHANNELS as HOLD_CHANNELS, WEIGHT_BEARING, HoldLearner
 from hal.drivers.motors.overload import OverloadGuard, load_magnitude
 from hal.drivers.motors.tracking_wedge import TrackingWedgeWatchdog
+from hal.drivers.motors.servo_caps import capped_torque_limit, write_caps_raw
 
 logger = logging.getLogger(__name__)
 
@@ -383,7 +384,10 @@ class AnimationService:
                 # See _SERVO_REST_SPEED: clears a cap a killed sweep left behind.
                 if rest_speed is not None:
                     pk.write2ByteTxRx(ph, sid, self._GOAL_SPEED_REG, rest_speed)
-                torque_limit = self._torque_limits.get(motor_name)
+                # HAL_SERVO_ACCEL / HAL_SERVO_TORQUE_LIMIT, while torque is still off.
+                caps = write_caps_raw(pk, ph, sid)
+                # A per-joint limit never rises above HAL_SERVO_TORQUE_LIMIT.
+                torque_limit = capped_torque_limit(self._torque_limits.get(motor_name))
                 if torque_limit is not None:
                     pk.write2ByteTxRx(ph, sid, self._TORQUE_LIMIT_REG, torque_limit)
                 if energize:
@@ -391,7 +395,8 @@ class AnimationService:
                 logger.info(
                     f"{motor_name} (ID {sid}): P={pgain}, I={igain}"
                     + (f", speed={rest_speed}" if rest_speed is not None else "")
-                    + (f", torque_limit={torque_limit}" if torque_limit is not None else "")
+                    + "".join(f", {c}" for c in caps)
+                    + (f", joint torque_limit={torque_limit}" if torque_limit is not None else "")
                     + f", torque {'ON' if energize else 'OFF (overload cut-off)' if locked_out else 'OFF (asleep)'}"
                 )
 

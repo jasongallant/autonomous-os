@@ -11,6 +11,24 @@ SERVO_FPS = int(os.environ.get("HAL_SERVO_FPS", "30"))
 SERVO_HOLD_S = float(os.environ.get("HAL_SERVO_HOLD_S", "3.0"))
 # Seconds to interpolate from the current pose to a recording's first frame.
 SERVO_PLAY_RAMP_S = float(os.environ.get("HAL_SERVO_PLAY_RAMP_S", "2.0"))
+
+
+def _optional_int(name: str, lo: int, hi: int) -> Optional[int]:
+    """Integer env var clamped to [lo, hi]; None when unset or blank."""
+    raw = os.environ.get(name, "").strip()
+    return max(lo, min(hi, int(raw))) if raw else None
+
+
+# Optional hardware caps for a body whose servos are stronger than the lamp's
+# STS3215, or whose supply is smaller than a full stall (see
+# hal/drivers/motors/servo_caps.py). Unset = nothing extra is written, the
+# lamp's behavior. HAL_SERVO_ACCEL caps every Acceleration register write
+# (1-254; higher = harder ramp; the servo reads 0 as no ramp at all, so 0 is not
+# a cap). HAL_SERVO_TORQUE_LIMIT is written to Torque_Limit at every configure
+# (0-1000 = 0-100 % of the servo's maximum torque); it lives in RAM and resets
+# on power-up.
+SERVO_ACCEL = _optional_int("HAL_SERVO_ACCEL", 1, 254)
+SERVO_TORQUE_LIMIT = _optional_int("HAL_SERVO_TORQUE_LIMIT", 0, 1000)
 HTTP_PORT = int(os.environ.get("HAL_HTTP_PORT", "5001"))
 # production: bind 127.0.0.1 + local-only middleware; developer: bind 0.0.0.0, no restrictions.
 _mode = os.environ.get("HAL_MODE", "production").strip().lower()

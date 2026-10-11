@@ -16,6 +16,7 @@ import numpy.typing as npt
 from hal import app_state
 from hal.drivers.motors import hold
 from hal.drivers.motors.freeze_lease import freeze_lease
+from hal.drivers.motors.servo_caps import capped_acceleration
 from hal.drivers.tracking import constants as C
 from hal.safety.policy import cap_speed_dps
 from hal.drivers.tracking.detection import ObjectDetector
@@ -319,9 +320,12 @@ class TrackerService:
                     "Goal_Velocity", {m: C.TRACKING_GOAL_VELOCITY for m in _TRACKING_MOTORS}
                 )
                 animation_service.robot.bus.sync_write(
-                    "Acceleration", {m: C.TRACKING_ACCELERATION for m in _TRACKING_MOTORS}
+                    "Acceleration", {m: capped_acceleration(C.TRACKING_ACCELERATION) for m in _TRACKING_MOTORS}
                 )
-            logger.info("[tracking] Goal_Velocity=%d Acceleration=%d", C.TRACKING_GOAL_VELOCITY, C.TRACKING_ACCELERATION)
+            logger.info(
+                "[tracking] Goal_Velocity=%d Acceleration=%d",
+                C.TRACKING_GOAL_VELOCITY, capped_acceleration(C.TRACKING_ACCELERATION),
+            )
         except Exception as e:
             logger.warning("[tracking] Failed to set motor params: %s", e)
 
@@ -807,7 +811,7 @@ class TrackerService:
                         "Goal_Velocity", {m: 0 for m in _TRACKING_MOTORS}
                     )
                     animation_service.robot.bus.sync_write(
-                        "Acceleration", {m: 254 for m in _TRACKING_MOTORS}
+                        "Acceleration", {m: capped_acceleration(254) for m in _TRACKING_MOTORS}
                     )
                 logger.info("Tracking ended — idle resuming from current pose")
             except Exception as e:
