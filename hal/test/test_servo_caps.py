@@ -113,7 +113,7 @@ def test_raw_writes_both_registers(caps):
 
 # --- AnimationService._configure_servos_raw --------------------------------------------------
 
-def _raw_configure(energize=True):
+def _raw_configure(energize=True, torque_limits=None):
     pytest.importorskip("lerobot")
     from types import SimpleNamespace
     from hal.drivers.motors.animation_service import AnimationService
@@ -123,6 +123,8 @@ def _raw_configure(energize=True):
     motors = {name: SimpleNamespace(id=i) for i, name in enumerate(
         ("base_yaw", "base_pitch", "elbow_pitch", "wrist_roll", "wrist_pitch"), start=1)}
     svc.bus_lock = threading.Lock()
+    svc._torque_limits = dict(torque_limits or {})  # the board's per-joint limits (servo_overload)
+    svc._overload = None  # no overload guard configured
     svc.robot = SimpleNamespace(bus=SimpleNamespace(port_handler=None, packet_handler=pk, motors=motors))
     svc._configure_servos_raw(energize=energize)
     return pk.writes
@@ -151,6 +153,28 @@ def test_configure_raw_writes_caps_when_asleep(caps):
     writes = _raw_configure(energize=False)
     assert (1, servo_caps.TORQUE_LIMIT_REG, 600) in writes
     assert (1, 40, 1) not in writes
+
+
+def _final_torque_limits(writes):
+    """Torque_Limit each servo is left with: the last write to the register wins."""
+    final = {}
+    for sid, addr, value in writes:
+        if addr == servo_caps.TORQUE_LIMIT_REG:
+            final[sid] = value
+    return final
+
+
+def test_per_joint_limit_alone_is_written_unchanged(caps):
+    writes = _raw_configure(torque_limits={"base_pitch": 300})
+    assert _final_torque_limits(writes) == {2: 300}
+
+
+def test_per_joint_limit_cannot_rise_above_the_cap(caps):
+    caps(torque=600)
+    final = _final_torque_limits(_raw_configure(torque_limits={"base_pitch": 900, "elbow_pitch": 200}))
+    assert final[2] == 600   # 900 asked, capped
+    assert final[3] == 200   # lower than the cap: the joint keeps its own
+    assert final[1] == 600   # no per-joint entry: the cap itself
 
 
 # --- LeLampFollower.configure ----------------------------------------------------------------

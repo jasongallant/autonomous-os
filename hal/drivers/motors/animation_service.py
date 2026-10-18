@@ -5,11 +5,13 @@ import logging
 import threading
 from typing import Any, Callable, Dict, List, Optional, Set
 from hal.follower import LeLampFollowerConfig, LeLampFollower
+from hal.follower.config_hal_follower import PERSISTENT_CALIBRATION_DIR
 from hal.presets import EMO_SLEEPY, SERVO_CMD_PLAY, SERVO_CMD_MUSIC_START, SERVO_CMD_MUSIC_STOP, SERVO_IDLE, SERVO_MUSIC_GROOVE
 from hal.drivers.motors.contact_profile import LAG_PREFIX, ContactProfile, PassiveLearner
 from hal.drivers.motors.hold_profile import CHANNELS as HOLD_CHANNELS, WEIGHT_BEARING, HoldLearner
 from hal.drivers.motors.overload import OverloadGuard, load_magnitude
 from hal.drivers.motors.tracking_wedge import TrackingWedgeWatchdog
+from hal.drivers.motors.poses import load_poses
 from hal.drivers.motors.servo_caps import capped_torque_limit, write_caps_raw
 
 logger = logging.getLogger(__name__)
@@ -124,6 +126,14 @@ class AnimationService:
                  contact_hold_profile: Optional[ContactProfile] = None):
         self.port = port
         self.lamp_id = lamp_id
+        # Zero, startup and rest poses: the lamp's ticks unless <lamp_id>.poses.json
+        # beside the calibration file overrides them (hal/drivers/motors/poses.py).
+        poses = load_poses(
+            lamp_id,
+            {"zero": ZERO_RAW, "startup": STARTUP_RAW, "rest": REST_RAW},
+            PERSISTENT_CALIBRATION_DIR,
+        )
+        self._zero_raw, self._startup_raw, self._rest_raw = poses["zero"], poses["startup"], poses["rest"]
         self.fps = fps
         self.duration = duration
         self.idle_recording = idle_recording
@@ -517,7 +527,7 @@ class AnimationService:
         # range).
         try:
             self.move_to_raw(
-                STARTUP_RAW,
+                self._startup_raw,
                 duration=STARTUP_MOVE_DURATION,
                 should_abort=lambda: not self._running.is_set(),
             )
@@ -1116,7 +1126,7 @@ class AnimationService:
         except Exception as e:
             logger.warning("zero: raw configure failed: %s", e)
         try:
-            self.move_to_raw(ZERO_RAW, duration=2.0)
+            self.move_to_raw(self._zero_raw, duration=2.0)
         except Exception as e:
             logger.warning("Could not move to zero: %s", e)
         self._sync_state_from_hardware()
@@ -1127,7 +1137,7 @@ class AnimationService:
         if self._event_thread and self._event_thread.is_alive():
             self._event_thread.join(timeout=3.0)
         try:
-            self.move_to_raw(REST_RAW, duration=2.0)
+            self.move_to_raw(self._rest_raw, duration=2.0)
         except Exception as e:
             logger.warning("Could not move to rest before release: %s", e)
         time.sleep(0.4)
