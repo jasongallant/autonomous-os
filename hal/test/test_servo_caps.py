@@ -13,16 +13,18 @@ import pytest
 
 from hal import config
 from hal.drivers.motors import servo_caps
-from hal.drivers.motors.servo_caps import capped_acceleration, capped_torque_limit, write_caps_raw
+from hal.drivers.motors.servo_caps import capped_acceleration, capped_torque_limit, i_gain, p_gain, write_caps_raw
 
 HAL_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 
 @pytest.fixture
 def caps(monkeypatch):
-    def _set(accel=None, torque=None):
+    def _set(accel=None, torque=None, pgain=None, igain=None):
         monkeypatch.setattr(config, "SERVO_ACCEL", accel)
         monkeypatch.setattr(config, "SERVO_TORQUE_LIMIT", torque)
+        monkeypatch.setattr(config, "SERVO_PGAIN", pgain)
+        monkeypatch.setattr(config, "SERVO_IGAIN", igain)
     _set()
     return _set
 
@@ -96,6 +98,19 @@ def test_torque_limit_cap_lowers_but_never_raises(caps):
     assert capped_torque_limit(None) is None
 
 
+# --- p_gain / i_gain -------------------------------------------------------------------------
+
+def test_gains_unset_pass_the_lamps_values_through(caps):
+    assert p_gain(32) == 32 and p_gain(16) == 16
+    assert i_gain(10) == 10 and i_gain(0) == 0
+
+
+def test_gains_set_replace_every_value(caps):
+    caps(pgain=16, igain=0)
+    assert p_gain(32) == 16 and p_gain(16) == 16
+    assert i_gain(10) == 0   # 0 is a value, not "unset"
+
+
 # --- write_caps_raw --------------------------------------------------------------------------
 
 def test_raw_writes_nothing_when_unset(caps):
@@ -153,6 +168,43 @@ def test_configure_raw_writes_caps_when_asleep(caps):
     writes = _raw_configure(energize=False)
     assert (1, servo_caps.TORQUE_LIMIT_REG, 600) in writes
     assert (1, 40, 1) not in writes
+
+
+def _gain_writes(writes):
+    """{servo id: (P, I)} left by the raw configure: the last write to each register wins."""
+    gains = {}
+    for sid, addr, value in writes:
+        if addr == 21:
+            gains.setdefault(sid, [None, None])[0] = value
+        elif addr == 23:
+            gains.setdefault(sid, [None, None])[1] = value
+    return {sid: tuple(v) for sid, v in gains.items()}
+
+
+def test_configure_raw_keeps_the_lamps_gains_without_overrides(caps):
+    gains = _gain_writes(_raw_configure())
+    assert gains[3] == (32, 10) and gains[5] == (32, 10)
+    assert gains[1] == (16, 0) and gains[2] == (16, 0) and gains[4] == (16, 0)
+
+
+def test_configure_raw_writes_the_gain_overrides_to_every_joint(caps):
+    caps(pgain=16, igain=0)
+    gains = _gain_writes(_raw_configure())
+    assert set(gains) == {1, 2, 3, 4, 5}
+    assert all(g == (16, 0) for g in gains.values())
+
+
+def test_follower_configure_writes_the_gain_overrides(caps):
+    caps(pgain=20, igain=3)
+    bus = _follower_configure()
+    assert {(m, v) for n, m, v in bus.writes if n == "P_Coefficient"} == {("base_yaw", 20), ("base_pitch", 20)}
+    assert {(m, v) for n, m, v in bus.writes if n == "I_Coefficient"} == {("base_yaw", 3), ("base_pitch", 3)}
+
+
+def test_follower_configure_keeps_its_gains_without_overrides(caps):
+    bus = _follower_configure()
+    assert {v for n, m, v in bus.writes if n == "P_Coefficient"} == {16}
+    assert {v for n, m, v in bus.writes if n == "I_Coefficient"} == {0}
 
 
 def _final_torque_limits(writes):

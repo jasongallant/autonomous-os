@@ -29,6 +29,11 @@ def _optional_int(name: str, lo: int, hi: int) -> Optional[int]:
 # on power-up.
 SERVO_ACCEL = _optional_int("HAL_SERVO_ACCEL", 1, 254)
 SERVO_TORQUE_LIMIT = _optional_int("HAL_SERVO_TORQUE_LIMIT", 0, 1000)
+# HAL_SERVO_PGAIN / HAL_SERVO_IGAIN replace the P and I gains HAL writes at every
+# configure (0-254). Unset, the lamp's own tuning stands (per-joint P 16/32, I 0/10 in
+# animation_service.py). A body with other servos or loads sets one value for all joints.
+SERVO_PGAIN = _optional_int("HAL_SERVO_PGAIN", 0, 254)
+SERVO_IGAIN = _optional_int("HAL_SERVO_IGAIN", 0, 254)
 HTTP_PORT = int(os.environ.get("HAL_HTTP_PORT", "5001"))
 # production: bind 127.0.0.1 + local-only middleware; developer: bind 0.0.0.0, no restrictions.
 _mode = os.environ.get("HAL_MODE", "production").strip().lower()

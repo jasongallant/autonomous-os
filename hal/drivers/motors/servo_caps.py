@@ -9,6 +9,8 @@ Every Acceleration write in HAL goes through capped_acceleration(), so a
 tracking session or LeRobot's configure_motors() cannot lift the cap.
 Torque_Limit is written once per configure, and a per-joint limit from the board's
 servo_overload config goes through capped_torque_limit(), so it can only lower the cap.
+HAL_SERVO_PGAIN / HAL_SERVO_IGAIN override the P and I gains HAL writes at configure,
+through p_gain() and i_gain(); unset, the lamp's values pass through.
 Both are RAM registers on the STS series (no Lock, no EEPROM wear).
 """
 
@@ -41,6 +43,16 @@ def capped_torque_limit(requested: Optional[int]) -> Optional[int]:
     if requested is None or cap is None:
         return requested
     return min(requested, cap)
+
+
+def p_gain(default: int) -> int:
+    """HAL_SERVO_PGAIN if set, else `default` (the lamp's gain for this joint)."""
+    return default if config.SERVO_PGAIN is None else config.SERVO_PGAIN
+
+
+def i_gain(default: int) -> int:
+    """HAL_SERVO_IGAIN if set, else `default`. 0 is a value, not "unset"."""
+    return default if config.SERVO_IGAIN is None else config.SERVO_IGAIN
 
 
 def write_caps_raw(packet_handler, port_handler, servo_id: int) -> list[str]:

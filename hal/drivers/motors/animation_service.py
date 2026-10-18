@@ -12,7 +12,7 @@ from hal.drivers.motors.hold_profile import CHANNELS as HOLD_CHANNELS, WEIGHT_BE
 from hal.drivers.motors.overload import OverloadGuard, load_magnitude
 from hal.drivers.motors.tracking_wedge import TrackingWedgeWatchdog
 from hal.drivers.motors.poses import load_poses
-from hal.drivers.motors.servo_caps import capped_torque_limit, write_caps_raw
+from hal.drivers.motors.servo_caps import capped_torque_limit, i_gain, p_gain, write_caps_raw
 
 logger = logging.getLogger(__name__)
 
@@ -379,8 +379,8 @@ class AnimationService:
             self._forget_goals()
             for motor_name, motor_obj in self.robot.bus.motors.items():
                 sid = motor_obj.id
-                pgain = self._SERVO_PGAIN.get(sid, 32)
-                igain = self._SERVO_IGAIN.get(sid, 0)
+                pgain = p_gain(self._SERVO_PGAIN.get(sid, 32))
+                igain = i_gain(self._SERVO_IGAIN.get(sid, 0))
                 rest_speed = self._SERVO_REST_SPEED.get(sid)
                 _, result, _ = pk.ping(ph, sid)
                 if result != COMM_SUCCESS:

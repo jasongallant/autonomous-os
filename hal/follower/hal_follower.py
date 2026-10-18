@@ -31,7 +31,7 @@ from lerobot.motors.feetech import (
 from lerobot.robots import Robot
 from lerobot.robots.utils import ensure_safe_goal_position
 from hal import config as hal_config
-from hal.drivers.motors.servo_caps import capped_acceleration
+from hal.drivers.motors.servo_caps import capped_acceleration, i_gain, p_gain
 from .config_hal_follower import LeLampFollowerConfig
 
 logger = logging.getLogger(__name__)
@@ -188,9 +188,9 @@ class LeLampFollower(Robot):
                 if hal_config.SERVO_TORQUE_LIMIT is not None:
                     self.bus.write("Torque_Limit", motor, hal_config.SERVO_TORQUE_LIMIT)
                 # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
-                self.bus.write("P_Coefficient", motor, 16)
+                self.bus.write("P_Coefficient", motor, p_gain(16))
                 # Set I_Coefficient and D_Coefficient to default value 0 and 32
-                self.bus.write("I_Coefficient", motor, 0)
+                self.bus.write("I_Coefficient", motor, i_gain(0))
                 self.bus.write("D_Coefficient", motor, 32)
 
     def setup_motors(self) -> None:
