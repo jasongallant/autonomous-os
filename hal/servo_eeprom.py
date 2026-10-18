@@ -12,6 +12,7 @@ import traceback
 import draccus
 from lerobot.motors import MotorCalibration
 
+from .config import SERVO_PORT
 from .follower import LeLampFollower, LeLampFollowerConfig
 
 _ATTRS = ("homing_offset", "range_min", "range_max")
@@ -127,8 +128,8 @@ def main() -> int:
         description="Write a calibration file into the servos' EEPROM (non-interactive).",
     )
     parser.add_argument(
-        "--port", type=str, default="/dev/ttyACM0",
-        help="Serial port of the servo bus (default: /dev/ttyACM0)",
+        "--port", type=str, default=SERVO_PORT,
+        help=f"Serial port of the servo bus (default: HAL_SERVO_PORT, here {SERVO_PORT})",
     )
     parser.add_argument(
         "--id", type=str, default=None, dest="calib_id",
