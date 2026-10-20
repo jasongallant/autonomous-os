@@ -1388,6 +1388,12 @@ class VoiceService:
                         gaze_focus_granted = gaze.on_speech_start()
                     except Exception as e:
                         logger.debug("gaze wake check skipped: %s", e)
+                    try:
+                        from hal.drivers.tracking import doa_turn
+
+                        doa_turn.on_speech_start()
+                    except Exception as e:
+                        logger.debug("doa turn skipped: %s", e)
                     pending_listening_cue_id = None
                     if gaze_focus_granted:
                         # Gaze + VAD has already proved intent, while STT normally needs

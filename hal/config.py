@@ -1427,3 +1427,20 @@ GAZE_PITCH_STALL_REST_S: float = float(
 GAZE_PITCH_STALL_BACKOFF_DEG: float = float(
     os.environ.get("HAL_GAZE_PITCH_STALL_BACKOFF_DEG", "2.0")
 )
+
+# Turn toward the speaker using the mic array's direction of arrival (XVF3800 over USB).
+# Off until DOA_OFFSET_DEG and DOA_SIGN are calibrated (bench/doa_calibrate.py).
+DOA_TURN_ENABLED: bool = (
+    os.environ.get("HAL_DOA_ENABLED", "false").lower() in ("1", "true", "yes")
+)
+# Chip azimuth that points straight ahead, and +1/-1 for the turn direction.
+DOA_OFFSET_DEG: float = float(os.environ.get("HAL_DOA_OFFSET_DEG", "0"))
+DOA_SIGN: float = -1.0 if float(os.environ.get("HAL_DOA_SIGN", "1")) < 0 else 1.0
+# Closer to the current heading than this, he stays put.
+DOA_MIN_DELTA_DEG: float = float(os.environ.get("HAL_DOA_MIN_DELTA_DEG", "10"))
+# At most one turn per this long.
+DOA_TURN_COOLDOWN_S: float = float(os.environ.get("HAL_DOA_COOLDOWN_S", "3"))
+# Don't turn if a face was in frame this recently: vision refines from there.
+DOA_TURN_SKIP_IF_FACE_S: float = float(os.environ.get("HAL_DOA_SKIP_IF_FACE_S", "2"))
+# Head glance added to base_pitch while turning, degrees (0 for none).
+DOA_GLANCE_PITCH_DEG: float = float(os.environ.get("HAL_DOA_GLANCE_PITCH_DEG", "4"))

@@ -922,6 +922,12 @@ def _check_speech(stage: str, *, request_repoint: bool) -> bool:
         return False
 
 
+def face_recently_seen(within_s: float) -> bool:
+    """True when a face or a near body was in frame within `within_s` seconds."""
+    now = time.monotonic()
+    return (now - _last_face_t) < within_s or (now - _last_near_body_t) < within_s
+
+
 def on_speech_start() -> bool:
     """Check the pre-speech gaze window when VAD confirms speech."""
     return _check_speech("speech-start", request_repoint=True)

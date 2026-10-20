@@ -131,6 +131,8 @@ hardware = [
     "adafruit-circuitpython-neopixel-spi",
     "gpiozero",
     "lgpio",
+    # XVF3800 direction of arrival (drivers/voice/doa.py).
+    "pyusb",
     "rpi-ws281x",
     "spidev",
 ]
