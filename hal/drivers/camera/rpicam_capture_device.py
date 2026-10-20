@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import threading
@@ -24,7 +25,42 @@ _MAX_BUFFER = 8 * 1024 * 1024
 _RESTART_DELAY_S = 2.0
 _STALL_RESTART_S = 10.0
 
+_AF_MODES = ("manual", "auto", "continuous")
+_AF_RANGES = ("normal", "macro", "full")
+
 logger = logging.getLogger(__name__)
+
+
+def _focus_args() -> list[str]:
+    """rpicam-vid focus flags from HAL_CAMERA_AUTOFOCUS / HAL_CAMERA_LENS_POSITION.
+
+    Unset leaves libcamera's default, which on the Camera Module 3 leaves the lens
+    unfocused for video. A fixed HAL_CAMERA_LENS_POSITION (dioptres, 2.0 is about
+    0.5 m) wins over autofocus. HAL_CAMERA_AUTOFOCUS_RANGE narrows the scan.
+    """
+    args: list[str] = []
+    lens = os.environ.get("HAL_CAMERA_LENS_POSITION", "").strip()
+    mode = os.environ.get("HAL_CAMERA_AUTOFOCUS", "").strip().lower()
+    af_range = os.environ.get("HAL_CAMERA_AUTOFOCUS_RANGE", "").strip().lower()
+    if lens:
+        try:
+            if float(lens) < 0:
+                raise ValueError(lens)
+            return ["--lens-position", lens]
+        except ValueError:
+            logger.warning("ignoring HAL_CAMERA_LENS_POSITION=%r (need dioptres >= 0)", lens)
+    if mode:
+        if mode in _AF_MODES:
+            args += ["--autofocus-mode", mode]
+        else:
+            logger.warning("ignoring HAL_CAMERA_AUTOFOCUS=%r (use %s)", mode, "/".join(_AF_MODES))
+    if af_range:
+        if af_range in _AF_RANGES:
+            args += ["--autofocus-range", af_range]
+        else:
+            logger.warning("ignoring HAL_CAMERA_AUTOFOCUS_RANGE=%r (use %s)",
+                           af_range, "/".join(_AF_RANGES))
+    return args
 
 
 class RpicamVideoCaptureDevice(VideoCaptureDeviceBase):
@@ -170,6 +206,7 @@ class RpicamVideoCaptureDevice(VideoCaptureDeviceBase):
         ]
         if self._rotate in (90, 180, 270):
             cmd += ["--rotation", str(int(self._rotate))]
+        cmd += _focus_args()
         self._logger.info("starting %s at %dx%d@%dfps", cmd[0], width, height, fps)
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0

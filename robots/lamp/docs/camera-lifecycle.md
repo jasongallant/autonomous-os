@@ -218,6 +218,9 @@ The USB camera's auto-exposure stretches integration time in low light (~60ms), 
 | `HAL_CAMERA_EXPOSURE` | `330` | Manual exposure time, V4L2 `exposure_absolute` ×100µs: `200`=20ms (30fps), `330`=33ms (≈30fps ceiling), `500`=50ms (≈20fps). |
 | `HAL_CAMERA_GAIN` | `96` | Sensor gain (camera-specific, e.g. 0–255). Brightens without costing fps, but adds noise; values above ~144 risk the ISP color corruption. Written in both modes (see below). |
 | `HAL_CAMERA_BRIGHTNESS` | _(unset)_ | Brightness offset (camera-specific, e.g. -64..64). Digital lift. |
+| `HAL_CAMERA_AUTOFOCUS` | _(unset)_ | `rpicam` driver only: `manual`, `auto` or `continuous`, passed as `--autofocus-mode`. Unset adds no flag. An invalid value is ignored with a warning. |
+| `HAL_CAMERA_AUTOFOCUS_RANGE` | _(unset)_ | `rpicam` driver only: `normal`, `macro` or `full`, passed as `--autofocus-range`. |
+| `HAL_CAMERA_LENS_POSITION` | _(unset)_ | `rpicam` driver only: fixed focus in dioptres (0 = infinity, 2.0 = 0.5 m), passed as `--lens-position`. Wins over the autofocus vars. |
 
 The defaults apply even with no `.env` entries. To pin the frame rate on a device, set `HAL_CAMERA_AUTO_EXPOSURE=manual` per device — the manual fallbacks (330 / 96) are values verified color-stable; the old defaults (`manual` / 500 / 255) are the known-toxic combo.
 
