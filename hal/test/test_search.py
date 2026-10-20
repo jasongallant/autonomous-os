@@ -1162,3 +1162,111 @@ def test_the_up_pattern_is_the_down_pattern_mirrored():
     assert search.USER_LOOK_CIRCLE == tuple(
         (roll, -dp) for roll, dp in search.LOOK_CIRCLE[:search.HALF_LOOKS]
     )
+
+
+def _face_search(frame_face=None, lift_face=None, exhaustive=False):
+    """A face search that sees a person everywhere.
+
+    `frame_face`: what _face_box finds in the frame itself; `lift_face`: what the head
+    lift finds after tilting up.
+    """
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    svc = _FakeSvc()
+
+    def _detect(f, t, strict=True, **kw):
+        return (300, 100, 40, 200) if t == "person" else None
+
+    det = mock.Mock()
+    det.detect = mock.Mock(side_effect=_detect)
+    lift = mock.Mock(return_value=lift_face)
+    with (
+        mock.patch.object(state, "camera_capture", _FakeCap(frame)),
+        mock.patch.object(state, "animation_service", svc),
+        mock.patch.object(state, "safety_policy", None),
+        mock.patch.object(state, "_camera_disabled", False, create=True),
+        mock.patch.object(search.time, "sleep"),
+        mock.patch("hal.drivers.tracking.user_bearing.read_estimate", return_value=None),
+        mock.patch.object(search, "_face_box", return_value=frame_face),
+        mock.patch.object(search, "_lift_to_face", lift),
+        mock.patch("hal.drivers.tracking.aim.centre_on_box",
+                   return_value=CentreResult(True, "centred", 1)),
+    ):
+        res = search.search_for_subject(target="face", detector=det,
+                                        on_progress=lambda *_: None,
+                                        exhaustive=exhaustive)
+    return res, svc, lift
+
+
+def test_a_face_in_frame_beats_the_body_and_needs_no_lift():
+    res, _svc, lift = _face_search(frame_face=(300, 40, 60, 70))
+    assert res.found is True
+    assert res.kind == "face"
+    assert not lift.called
+
+
+def test_a_person_without_a_face_triggers_a_head_lift_once_per_bearing():
+    res, _svc, lift = _face_search(exhaustive=True)
+    assert lift.call_count == search.MAX_STOPS, (
+        f"expected one lift per bearing, got {lift.call_count}")
+    assert res.found is True and res.kind == "person"
+
+
+def test_a_lift_that_finds_the_face_reports_the_face():
+    res, _svc, lift = _face_search(lift_face=(300, 40, 60, 70))
+    assert lift.call_count == 1
+    assert res.found is True
+    assert res.kind == "face"
+
+
+def test_the_lift_centres_on_the_head_strip_of_the_person_box():
+    captured = {}
+
+    def _spy(svc, cap, probe, **kw):
+        captured["box"] = probe(np.zeros((480, 640, 3), dtype=np.uint8))
+        return CentreResult(False, "deadline", 1)
+
+    with mock.patch("hal.drivers.tracking.aim.centre_on_box", side_effect=_spy), \
+            mock.patch.object(search, "_face_box", return_value=None), \
+            mock.patch.object(search, "_grab_frame", return_value=None), \
+            mock.patch("hal.drivers.tracking.search._detect_subject",
+                       return_value=((300, 0, 80, 400), "person", None)):
+        assert search._lift_to_face(object(), object(), object()) is None
+    x, y, w, h = captured["box"]
+    assert (x, y, w) == (300, 0, 80)
+    assert h == int(400 * search.HEAD_STRIP_FRAC)
+
+
+def _sighting(yaw, box_h, kind="face", roll=0.0):
+    return search.SearchResult(True, f"found {kind}", 1, yaw, roll, 1, kind,
+                               (10, 10, box_h // 2, box_h))
+
+
+def test_the_bearing_with_the_most_face_looks_is_reported():
+    stops = [0.0, 90.0, -90.0]
+    found = [_sighting(0.0, 200), _sighting(0.0, 190),
+             _sighting(-92.0, 120), _sighting(-88.0, 130), _sighting(-90.0, 125)]
+    best = search._best_sighting(found, stops)
+    assert round(best.found_at_yaw) in (-92, -88, -90)
+    assert best.box[3] == 130, "the largest face at that bearing"
+
+
+def test_a_tie_on_looks_goes_to_the_larger_face():
+    stops = [0.0, 90.0, -90.0]
+    found = [_sighting(0.0, 100), _sighting(0.0, 110),
+             _sighting(-90.0, 160), _sighting(-90.0, 150)]
+    assert search._best_sighting(found, stops).found_at_yaw == -90.0
+
+
+def test_a_face_outranks_any_number_of_bodies():
+    stops = [0.0, 90.0, -90.0]
+    found = [_sighting(0.0, 300, "person"), _sighting(0.0, 300, "person"),
+             _sighting(90.0, 80, "face")]
+    assert search._best_sighting(found, stops).kind == "face"
+
+
+def test_with_only_bodies_the_best_body_is_reported():
+    stops = [0.0, 90.0, -90.0]
+    found = [_sighting(90.0, 200, "person"), _sighting(0.0, 100, "person"),
+             _sighting(0.0, 100, "person")]
+    best = search._best_sighting(found, stops)
+    assert best.kind == "person" and best.found_at_yaw == 0.0

@@ -66,6 +66,10 @@ USER_LOOK_CIRCLE = tuple((roll, -dp) for roll, dp in LOOK_CIRCLE[:HALF_LOOKS])
 # glances about and lets it go; it does not quarter the room like a security camera.
 GLANCE_LOOKS = ((-ROLL_LOOK_DEG, 0.0), (+ROLL_LOOK_DEG, 0.0))
 
+# A person seen without a face (head above the frame) is followed up by centring on this
+# top fraction of the person box, so the camera tilts until the head comes into view.
+HEAD_STRIP_FRAC: float = 0.25
+
 # Margin held off the wrist_pitch soft stop. Device-measured 2026-09-09 on lamp-ac82:
 # wrist_pitch reached -89.55 going up (stopped by WRIST_PITCH_MIN, not by the joint) and
 # -16.61 going down with no stall at all.
@@ -293,6 +297,51 @@ def _user_face_probe(first_box: tuple) -> Callable[[Any], Optional[tuple]]:
     return probe
 
 
+def _face_box(frame: Any) -> Optional[tuple]:
+    """The near face in `frame` as a full-resolution (x, y, w, h), or None.
+
+    Uses the face detector's own size floor, so a speck on a monitor does not count.
+    """
+    from hal.drivers.tracking import aim, detection, frame_utils
+
+    small, scale = frame_utils.downscale(frame)
+    with aim._detector_lock_use:
+        found = detection.detect_face_with_landmarks(small)
+    if found is None:
+        return None
+    s = 1.0 / scale if scale else 1.0
+    x, y, w, h = found[0]
+    return (int(x * s), int(y * s), int(w * s), int(h * s))
+
+
+def _lift_to_face(svc: Any, cap: Any, detector: Any) -> Optional[tuple]:
+    """Tilt and turn toward the head of a person seen without a face.
+
+    A seated user's head sits above a camera that looks at the desk, so the person
+    box is clipped at the top of the frame. Centring on the top strip of that box
+    drives the camera up (through centre_on_box's own joint split and lean-back
+    cap) until the head enters the frame. Returns the face box, or None.
+    """
+    from hal.drivers.tracking import aim
+
+    def probe(frame: Any) -> Optional[tuple]:
+        face = _face_box(frame)
+        if face is not None:
+            return face
+        box, kind, _conf = _detect_subject(detector, frame)
+        if box is None or kind != "person":
+            return None
+        x, y, w, h = box
+        return (x, y, w, max(1, int(h * HEAD_STRIP_FRAC)))
+
+    res = aim.centre_on_box(svc, cap, probe=probe)
+    frame = _grab_frame(cap)
+    face = _face_box(frame) if frame is not None else None
+    logger.info("[search] head lift: %s after %d iteration(s) -> %s",
+                res.reason, res.iterations, "face" if face else "no face")
+    return face
+
+
 def _detect_target(detector: Any, frame: Any, target: str):
     """Find `target` in the frame. Returns (box, kind), or (None, None)."""
     from hal.drivers.tracking.aim import _detect_subject
@@ -501,6 +550,34 @@ def _look_list(seed_pose: Optional[dict], exhaustive: bool,
     return out
 
 
+def _best_sighting(found: List[SearchResult], stops: List[float]) -> SearchResult:
+    """The sighting an exhaustive sweep should report, not merely the first.
+
+    Faces beat bodies. The bearing where the most looks saw a face wins, since a real
+    person shows up across several looks and a stray hit does not; within it, the
+    largest face (the nearest person).
+    """
+    pool = [h for h in found if h.kind == "face"] or list(found)
+
+    def stop_of(h: SearchResult) -> float:
+        yaw = h.found_at_yaw if h.found_at_yaw is not None else 0.0
+        return min(stops, key=lambda s: abs(s - yaw))
+
+    def height(h: SearchResult) -> int:
+        return int(h.box[3]) if h.box else 0
+
+    groups: dict = {}
+    for h in pool:
+        groups.setdefault(stop_of(h), []).append(h)
+    stop, group = max(groups.items(),
+                      key=lambda kv: (len(kv[1]), max(height(h) for h in kv[1])))
+    best = max(group, key=height)
+    logger.info("[search] sightings by bearing: %s -> reporting yaw %+.0f (%d look(s), face %dpx)",
+                {round(k): len(v) for k, v in sorted(groups.items())}, stop,
+                len(group), height(best))
+    return best
+
+
 def _sweep(svc: Any, cap: Any, detector: Any, target: str,
            on_progress: Optional[Callable[[int, int], None]] = None,
            exhaustive: bool = False, for_user: bool = False,
@@ -527,6 +604,7 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
     found: List[SearchResult] = []
     for yaw in stops:
         bearings += 1
+        lifted = False
         if _abort_evt.is_set():
             return _abandon(svc, seed_pose, visited)
 
@@ -563,6 +641,18 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                 box, kind = (track.box, "face") if track is not None else (None, None)
             else:
                 box, kind = _detect_target(detector, frame, target)
+            seen_yaw = yaw
+            face_verified = False
+            if target == "face" and not for_user and not glance and kind == "person":
+                # _detect_subject prefers the body, so look for the face itself, and if
+                # the head is out of frame (once per bearing) tilt up to it.
+                face = _face_box(frame)
+                if face is None and not lifted:
+                    lifted = True
+                    face = _lift_to_face(svc, cap, detector)
+                    seen_yaw = _current_yaw(svc)
+                if face is not None:
+                    box, kind, face_verified = face, "face", True
             logger.info("[search] look %d/%d: grab %.0fms detect %.0fms -> %s",
                         visited, total_looks, _grab_ms,
                         (time.monotonic() - _t_det) * 1000,
@@ -572,12 +662,15 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                     "[search] found %s at yaw %+.0f roll %+.0f after %d look(s)",
                     kind, yaw, roll, visited,
                 )
-                hit = SearchResult(True, f"found {kind}", visited, yaw, roll,
+                hit = SearchResult(True, f"found {kind}", visited, seen_yaw, roll,
                                    bearings, kind, box)
+                if exhaustive and seen_yaw != yaw:
+                    # The head lift moved the base; go back to this bearing's stop.
+                    _look_at(svc, roll, wrist_pitch, yaw=yaw)
                 if not exhaustive:
                     # Correct FIRST, straighten AFTER. And without any correction at all
                     # the sweep pointed at `yaw + roll`.
-                    probe = (_user_face_probe(box) if for_user
+                    probe = (_user_face_probe(box) if for_user or face_verified
                              else _sticky_probe(detector, target, box))
                     centred = aim.centre_on_box(svc, cap, probe=probe)
                     hit.centred = centred.centred
@@ -608,9 +701,10 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
         _restore(svc, seed_pose)
         logger.info("[search] full sweep: %d sighting(s) of '%s' across %d looks",
                     len(found), target, visited)
+        best = _best_sighting(found, stops)
         return SearchResult(True, f"found {target} x{len(found)}", visited,
-                            found[0].found_at_yaw, found[0].found_at_roll,
-                            bearings, found[0].kind, found[0].box)
+                            best.found_at_yaw, best.found_at_roll,
+                            bearings, best.kind, best.box)
 
     _restore(svc, seed_pose)
     logger.info("[search] no %s found after %d look(s) — back to the starting pose",

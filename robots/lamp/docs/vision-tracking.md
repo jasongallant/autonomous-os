@@ -570,6 +570,14 @@ lamp decides for itself. A sweep is entered when:
   search for a thing always stops at the first sighting, centres on it and stays there.
 - Coverage is `bearings x looks per bearing`: 3 x 6 = **18 looks** normally, 3 x 9 = **27**
   exhaustive. Budget roughly **2 seconds per look**.
+- A `face` target checks for an actual face (the YuNet floor, `detect_face_with_landmarks`) before
+  accepting a person box, because the closest-subject policy returns the body whenever one is in
+  frame. A person with no face means the head is above the frame (a seated user under a camera that
+  looks at the desk): once per bearing the sweep runs `aim.centre_on_box` on the top 25 % of the
+  person box (`HEAD_STRIP_FRAC`), which tilts and turns until the head is in view, then looks for the
+  face again (`[search] head lift` in the log). An exhaustive sweep reports the best sighting, not the
+  first: faces over bodies, then the bearing with the most face looks, then the largest face
+  (`_best_sighting`; `[search] sightings by bearing`).
 
 The response is a structured body, not one prose string:
 
