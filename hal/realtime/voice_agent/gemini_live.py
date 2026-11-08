@@ -56,6 +56,18 @@ from hal.realtime.voice_agent.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _turn_toward_voice() -> None:
+    """A new utterance inside an open session: the local VAD's speech start doesn't fire
+    there, so the server's activity start is the cue for the sound turn (off unless
+    HAL_DOA_ENABLED; returns at once)."""
+    try:
+        from hal.drivers.tracking import doa_turn
+
+        doa_turn.on_speech_start()
+    except Exception as e:
+        logger.debug("[realtime] doa turn skipped: %s", e)
 usage_logger = logging.getLogger("hal.realtime.usage")
 
 # USD per 1M tokens (verified 2026-06-29); keys match as a substring of the model name.
@@ -1322,6 +1334,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 _accepted_pcm = False
                 self._live_user_turn_id = ""
                 self._live_speech_emitted = False
+                _turn_toward_voice()
             elif activity_type == "ACTIVITY_END":
                 self._observe_user_speech(endpoint_at=time.monotonic())
 

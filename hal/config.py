@@ -1440,7 +1440,32 @@ DOA_SIGN: float = -1.0 if float(os.environ.get("HAL_DOA_SIGN", "1")) < 0 else 1.
 DOA_MIN_DELTA_DEG: float = float(os.environ.get("HAL_DOA_MIN_DELTA_DEG", "10"))
 # At most one turn per this long.
 DOA_TURN_COOLDOWN_S: float = float(os.environ.get("HAL_DOA_COOLDOWN_S", "3"))
-# Don't turn if a face was in frame this recently: vision refines from there.
+# A face (a body alone doesn't count) in frame this recently, with the sound inside
+# DOA_IN_VIEW_DEG of the heading, is the talker already in front: no turn.
 DOA_TURN_SKIP_IF_FACE_S: float = float(os.environ.get("HAL_DOA_SKIP_IF_FACE_S", "2"))
+DOA_IN_VIEW_DEG: float = float(os.environ.get("HAL_DOA_IN_VIEW_DEG", "35"))
 # Head glance added to base_pitch while turning, degrees (0 for none).
 DOA_GLANCE_PITCH_DEG: float = float(os.environ.get("HAL_DOA_GLANCE_PITCH_DEG", "4"))
+# Where the direction comes from: "chip" (the XVF3800's own register over USB) or "raw"
+# (SRP-PHAT on the raw mic channels, drivers/voice/doa_raw.py) for an array whose chip
+# direction can't follow a new talker.
+DOA_SOURCE: str = os.environ.get("HAL_DOA_SOURCE", "chip").strip().lower()
+# "raw" only: the ALSA PCM carrying just the raw mics, and their x,y in mm in that channel
+# order. Default: the reSpeaker Flex circular ring as its firmware reports it
+# (AEC_MIC_ARRAY_GEO, mics 0-3 = capture channels 2-5).
+DOA_RAW_DEVICE: str = os.environ.get("HAL_DOA_RAW_DEVICE", "device_doa")
+DOA_MIC_MM: str = os.environ.get(
+    "HAL_DOA_MIC_MM", "22.2,-22.2;22.2,22.2;-22.2,22.2;-22.2,-22.2"
+)
+# Register the USB reader polls: "doa_value" (DOA_VALUE, degrees + speech flag) or
+# "selected" (AUDIO_MGR_SELECTED_AZIMUTHS[0], XMOS's speech-energy pick, NaN without speech).
+DOA_REGISTER: str = os.environ.get("HAL_DOA_REGISTER", "doa_value").strip().lower()
+# The turn takes its direction from the readings in a window that ends DOA_LOCK_WAIT_S after
+# VAD confirms speech and spans DOA_WINDOW_S: the chip needs a moment to settle on a new
+# talker, and VAD confirms only after the talker began (bench/doa_chip_report.py measures it).
+DOA_LOCK_WAIT_S: float = float(os.environ.get("HAL_DOA_LOCK_WAIT_S", "0.5"))
+DOA_WINDOW_S: float = float(os.environ.get("HAL_DOA_WINDOW_S", "0.5"))
+# After turning, look for the talker's face at that bearing (one search glance).
+DOA_FIND_FACE: bool = (
+    os.environ.get("HAL_DOA_FIND_FACE", "true").lower() in ("1", "true", "yes")
+)

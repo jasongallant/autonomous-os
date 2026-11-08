@@ -748,6 +748,15 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.debug("gaze watcher unavailable: %s", e)
 
+    # Off by default (HAL_DOA_ENABLED). Polls the mic array's sound direction, so a
+    # speech start can use readings from before VAD confirmed it.
+    try:
+        from hal.drivers.tracking import doa_turn
+
+        doa_turn.start()
+    except Exception as e:
+        logger.debug("doa poller unavailable: %s", e)
+
     if DisplayService:
         try:
             state.display_service = DisplayService()

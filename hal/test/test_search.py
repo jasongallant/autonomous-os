@@ -1150,6 +1150,34 @@ def test_a_glance_looks_left_and_right_without_turning_the_base():
     assert len(yaws) <= 1, f"the base turned during a glance: {yaws}"
 
 
+def test_a_fresh_cue_seeds_the_glance_and_it_looks_straight_first():
+    """doa_turn's face check: start at the voice's bearing, not the remembered one (which
+    would also restore the remembered posture), and look where the lamp already points
+    before glancing either side."""
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    svc = _FakeSvc()
+    svc.yaw, svc.roll = 40.0, 8.0
+    det = mock.Mock()
+    det.detect = mock.Mock(return_value=None)
+    seed = mock.Mock(return_value=-90.0)
+    with (
+        mock.patch.object(search, "_seed_from_bearing", seed),
+        mock.patch.object(state, "camera_capture", _FakeCap(frame)),
+        mock.patch.object(state, "animation_service", svc),
+        mock.patch.object(state, "safety_policy", None),
+        mock.patch.object(state, "_camera_disabled", False, create=True),
+        mock.patch.object(search.time, "sleep"),
+    ):
+        res = search.search_for_subject(detector=det, glance=True, seed_yaw=40.0,
+                                        on_progress=lambda _v, _t: None)
+    seed.assert_not_called()
+    assert res.looks_visited == len(search.GLANCE_LOOKS) + 1
+    assert res.bearings_visited == 1
+    assert {y for y, _r in svc.trail} <= {40.0}, f"the base left the cue's bearing: {svc.trail}"
+    rolls = [h["wrist_roll.pos"] for h in svc.holds if "wrist_roll.pos" in h]
+    assert rolls[:2] == [r for r, _dp in search.GLANCE_LOOKS], "glances follow the straight look"
+
+
 def test_the_other_sweeps_still_look_down_at_the_desk():
     """/servo/search ("find my things") and look-aim's fallback sweep are unchanged."""
     _res, svc = _run(bearing=None)

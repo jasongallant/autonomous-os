@@ -56,6 +56,10 @@ _climb_gave_up: bool = False
 # the completed utterance gets one final gaze check after the camera settles.
 _speech_repoint_requested = threading.Event()
 _speech_repoint_requested_t: float = 0.0
+# The same request held back while the sound direction (doa_turn) decides the turn
+# first; doa_turn hands it back with request_deferred_repoint() when it can't.
+_speech_repoint_deferred_t: float = 0.0
+DEFERRED_REPOINT_MAX_AGE_S: float = 5.0
 
 _dy_samples: Deque[Tuple[float, float, bool]] = deque()
 _dy_lock = threading.Lock()
@@ -838,7 +842,7 @@ def _who_is_in_frame() -> Tuple[str, float]:
 
 def _check_speech(stage: str, *, request_repoint: bool) -> bool:
     """Decide whether the current utterance was addressed to the lamp."""
-    global _last_grant_t, _speech_repoint_requested_t
+    global _last_grant_t, _speech_repoint_requested_t, _speech_repoint_deferred_t
     try:
         if not config.GAZE_WAKE_ENABLED:
             return False
@@ -847,6 +851,7 @@ def _check_speech(stage: str, *, request_repoint: bool) -> bool:
         # that abandoned request rather than letting it leak into this one.
         if request_repoint:
             _speech_repoint_requested_t = 0.0
+            _speech_repoint_deferred_t = 0.0
             _speech_repoint_requested.clear()
 
         ratio, considered = facing_ratio()
@@ -889,12 +894,21 @@ def _check_speech(stage: str, *, request_repoint: bool) -> bool:
             # Do not turn toward somebody who was measured facing away: that is
             # precisely the signal that the nearby speech may be for somebody else.
             if request_repoint and considered < config.GAZE_MIN_SAMPLES:
-                _speech_repoint_requested_t = now
-                _speech_repoint_requested.set()
-                logger.info(
-                    "[gaze] %s: no usable face evidence; requesting remembered-pose reacquire",
-                    stage,
-                )
+                if _sound_turn_decides_first():
+                    # A fresh direction beats a remembered pose; doa_turn hands this
+                    # back if it can't tell where the voice came from.
+                    _speech_repoint_deferred_t = now
+                    logger.info(
+                        "[gaze] %s: no usable face evidence; the sound direction decides first",
+                        stage,
+                    )
+                else:
+                    _speech_repoint_requested_t = now
+                    _speech_repoint_requested.set()
+                    logger.info(
+                        "[gaze] %s: no usable face evidence; requesting remembered-pose reacquire",
+                        stage,
+                    )
             return False
         if cooling or config.GAZE_WAKE_SHADOW:
             return False
@@ -926,6 +940,35 @@ def face_recently_seen(within_s: float) -> bool:
     """True when a face or a near body was in frame within `within_s` seconds."""
     now = time.monotonic()
     return (now - _last_face_t) < within_s or (now - _last_near_body_t) < within_s
+
+
+def face_seen_within(within_s: float) -> bool:
+    """True when a face was in frame within `within_s` seconds. A body alone doesn't
+    count: a seated user's arm and lap fill the frame while the head is above it."""
+    return (time.monotonic() - _last_face_t) < within_s
+
+
+def _sound_turn_decides_first() -> bool:
+    try:
+        from hal.drivers.tracking import doa_turn
+
+        return doa_turn.handles_speech_start()
+    except Exception:
+        return False
+
+
+def request_deferred_repoint(why: str) -> bool:
+    """Run the speech-start reacquire that waited for the sound direction, if one did."""
+    global _speech_repoint_deferred_t, _speech_repoint_requested_t
+    now = time.monotonic()
+    t = _speech_repoint_deferred_t
+    _speech_repoint_deferred_t = 0.0
+    if t <= 0.0 or now - t > DEFERRED_REPOINT_MAX_AGE_S:
+        return False
+    _speech_repoint_requested_t = now
+    _speech_repoint_requested.set()
+    logger.info("[gaze] speech-start: %s; requesting remembered-pose reacquire", why)
+    return True
 
 
 def on_speech_start() -> bool:
@@ -1583,4 +1626,5 @@ def reset_for_test() -> None:
     globals()["_last_sweep_t"] = 0.0
     globals()["_sweep_wait_minute"] = -1
     _speech_repoint_requested_t = 0.0
+    globals()["_speech_repoint_deferred_t"] = 0.0
     _speech_repoint_requested.clear()

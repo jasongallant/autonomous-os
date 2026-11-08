@@ -469,12 +469,15 @@ def _say_at_the_midpoint() -> Callable[[int, int], None]:
 def search_for_subject(target: str = "person", detector: Any = None,
                        on_progress: Optional[Callable[[int, int], None]] = None,
                        exhaustive: bool = False, for_user: bool = False,
-                       glance: bool = False) -> SearchResult:
+                       glance: bool = False,
+                       seed_yaw: Optional[float] = None) -> SearchResult:
     """Sweep for a subject, stopping at the first one seen.
 
     `for_user`: the subject is the lamp's user, not anybody (#545). Each look must
     turn up a face that passes user_check.adopts_bearing; a body alone never ends it.
     `glance`: GLANCE_LOOKS at the seed bearing only, for a look-around nobody asked for.
+    `seed_yaw`: start at this bearing, not the remembered one, from a fresh cue such as
+    the direction a voice came from; with `glance` it looks straight there first.
     """
     _abort_evt.clear()
 
@@ -513,7 +516,7 @@ def search_for_subject(target: str = "person", detector: Any = None,
         capped = svc.set_joint_speed("base_yaw", SWEEP_YAW_SPEED)
         try:
             res = _sweep(svc, cap, detector, target, on_progress, exhaustive, for_user,
-                         glance)
+                         glance, seed_yaw)
         finally:
             if capped:
                 svc.set_joint_speed(
@@ -581,11 +584,13 @@ def _best_sighting(found: List[SearchResult], stops: List[float]) -> SearchResul
 def _sweep(svc: Any, cap: Any, detector: Any, target: str,
            on_progress: Optional[Callable[[int, int], None]] = None,
            exhaustive: bool = False, for_user: bool = False,
-           glance: bool = False) -> SearchResult:
+           glance: bool = False, seed_yaw: Optional[float] = None) -> SearchResult:
     """The sweep itself, with the body already owned."""
     from hal.drivers.tracking import aim
 
-    stops = _stop_list(_seed_yaw(svc))
+    # A fresh cue's bearing skips _seed_from_bearing, which would also move the body
+    # back to the remembered posture.
+    stops = _stop_list(_seed_yaw(svc) if seed_yaw is None else float(seed_yaw))
     if glance:
         stops = stops[:1]
     try:
@@ -594,6 +599,11 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
     except Exception:
         seed_pose = None
     looks = _look_list(seed_pose, exhaustive, for_user, glance)
+    if glance and seed_yaw is not None:
+        # The cue already turned the lamp to the bearing: look where it points before
+        # glancing either side.
+        roll = (seed_pose or {}).get("wrist_roll.pos", 0.0)
+        looks = [(roll, None)] + list(looks)
     total_looks = len(stops) * len(looks)
     logger.info("[search] sweeping %d bearings x %d looks (%d total) for '%s': %s",
                 len(stops), len(looks), total_looks, target,

@@ -385,6 +385,40 @@ def test_missing_face_requests_reacquire_and_can_authorize_the_same_utterance(ar
     assert not gaze._speech_repoint_requested.is_set()
 
 
+def test_with_the_sound_turn_on_the_reacquire_waits_for_it(armed, voice, monkeypatch):
+    """A fresh sound direction beats the remembered pose: gaze reacquires only when the
+    DOA turn can't tell where the voice came from, and only once."""
+    monkeypatch.setattr(config, "DOA_TURN_ENABLED", True)
+    assert gaze.on_speech_start() is False
+    assert not gaze._speech_repoint_requested.is_set()
+    assert gaze.request_deferred_repoint("no steady sound direction") is True
+    assert gaze._speech_repoint_requested.is_set()
+    assert gaze.request_deferred_repoint("again") is False
+
+
+def test_a_stale_deferred_reacquire_is_dropped(armed, voice, monkeypatch):
+    monkeypatch.setattr(config, "DOA_TURN_ENABLED", True)
+    gaze.on_speech_start()
+    monkeypatch.setattr(gaze, "_speech_repoint_deferred_t",
+                        gaze.time.monotonic() - gaze.DEFERRED_REPOINT_MAX_AGE_S - 1.0)
+    assert gaze.request_deferred_repoint("late") is False
+    assert not gaze._speech_repoint_requested.is_set()
+
+
+def test_nothing_deferred_means_nothing_to_hand_back(armed, voice):
+    assert gaze.request_deferred_repoint("no steady sound direction") is False
+    assert not gaze._speech_repoint_requested.is_set()
+
+
+def test_face_seen_within_ignores_a_body_alone(monkeypatch):
+    """2026-10-19: a seated user's arm and lap filled the frame while the head was above it."""
+    now = gaze.time.monotonic()
+    monkeypatch.setattr(gaze, "_last_face_t", now - 10.0)
+    monkeypatch.setattr(gaze, "_last_near_body_t", now)
+    assert gaze.face_recently_seen(2.0)
+    assert not gaze.face_seen_within(2.0)
+
+
 def test_a_measured_away_head_never_requests_the_reacquire_exception(armed, voice):
     now = gaze.time.monotonic()
     _trail(now, [90.0, 90.0, 90.0, 90.0])
