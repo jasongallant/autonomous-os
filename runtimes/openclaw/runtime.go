@@ -84,6 +84,31 @@ func (r RuntimeInfo) AtLeast(year, minor int) bool {
 	return r.Minor >= minor
 }
 
+// AtLeastPatch reports whether the detected runtime is ≥ year.minor.patch; undetected counts as current, as in AtLeast.
+func (r RuntimeInfo) AtLeastPatch(year, minor, patch int) bool {
+	if !r.Detected {
+		return true
+	}
+	if r.Year != year {
+		return r.Year > year
+	}
+	if r.Minor != minor {
+		return r.Minor > minor
+	}
+	return r.Patch >= patch
+}
+
+// StrictConfig reports whether the runtime validates openclaw.json strictly (OpenClaw ≥ 2026.9.3). Those releases
+// reject agents.defaults.compaction.reserveTokensFloor, gateway.controlUi.allowInsecureAuth and
+// messages.removeAckAfterReply as unrecognized keys, and tools.exec.security/ask once tools.exec.mode is set; the
+// gateway then refuses to load the file.
+func (r RuntimeInfo) StrictConfig() bool {
+	return r.AtLeastPatch(2026, 9, 3)
+}
+
+// openclawRuntime is currentOpenclawRuntime, swappable in tests.
+var openclawRuntime = currentOpenclawRuntime
+
 // currentOpenclawRuntime parses the cached OpenClaw version (the same value the MQTT `info` message reports) into a RuntimeInfo — no extra shell-out.
 func currentOpenclawRuntime() RuntimeInfo {
 	m := openclawSemverNumRe.FindStringSubmatch(GetOpenClawVersion())

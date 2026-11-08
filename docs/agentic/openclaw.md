@@ -78,6 +78,26 @@ attested workspace`), which fails setup with `agent_setup_failed`.
 Device already stuck on this error: `sudo rm -rf /root/.openclaw/state
 /root/.openclaw/workspace-attestations`, then run setup again.
 
+## Strict config validation (OpenClaw >= 2026.9.3)
+
+OpenClaw 2026.9.3 validates `openclaw.json` strictly and refuses to load a file
+with keys it retired; `openclaw config validate` names them. Releases up to
+2026.9.2 accepted them. `RuntimeInfo.StrictConfig()` (`runtime.go`) gates every
+key os-server writes that 2026.9.3 rejects:
+
+| Key | Written by | On >= 2026.9.3 |
+|-----|-----------|----------------|
+| `agents.defaults.compaction.reserveTokensFloor` | `ensureAgentDefaults` (5000), `SetupAgent` (80000) | removed; the built-in default applies |
+| `gateway.controlUi.allowInsecureAuth` | `ensureControlUIConfig` | removed |
+| `tools.exec.security` / `tools.exec.ask` | `SetupAgent` | replaced by `tools.exec.mode: "full"`, the same policy |
+| `messages.removeAckAfterReply` | `SetupAgent` | removed |
+
+An undetected version counts as current, as in `RuntimeInfo.AtLeast`. Upgrading
+an existing device from an older release also needs `openclaw doctor --fix`
+once with the gateway stopped (an agent database schema migration); the doctor
+refuses to run while any ancestor of its temp directory, `/` included, is group-
+or world-writable without the sticky bit.
+
 ## Reply prefix and heartbeat replies
 
 - **No reply prefix.** Setup used to write `messages.responsePrefix: "auto"`,

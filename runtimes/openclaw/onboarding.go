@@ -646,15 +646,23 @@ func (s *OpenclawService) ensureControlUIConfig() (bool, error) {
 		}
 	}
 
-	switch v := cu["allowInsecureAuth"].(type) {
-	case nil:
-		cu["allowInsecureAuth"] = false
-		changed = true
-	case bool:
-		// Loopback HTTP works without this flag — nginx /gw/ already restricts to loopback peers (F6), so non-loopback HTTP can never reach the handshake.
-		if v {
+	if openclawRuntime().StrictConfig() {
+		// Retired in OpenClaw 2026.9.3: its validator rejects the key.
+		if _, ok := cu["allowInsecureAuth"]; ok {
+			delete(cu, "allowInsecureAuth")
+			changed = true
+		}
+	} else {
+		switch v := cu["allowInsecureAuth"].(type) {
+		case nil:
 			cu["allowInsecureAuth"] = false
 			changed = true
+		case bool:
+			// Loopback HTTP works without this flag — nginx /gw/ already restricts to loopback peers (F6), so non-loopback HTTP can never reach the handshake.
+			if v {
+				cu["allowInsecureAuth"] = false
+				changed = true
+			}
 		}
 	}
 
@@ -956,7 +964,13 @@ func (s *OpenclawService) ensureAgentDefaults() (bool, error) {
 	changed := false
 
 	compactionMap := ensureMap(defaultsMap, "compaction")
-	if v, _ := compactionMap["reserveTokensFloor"].(float64); v != 5000 {
+	if openclawRuntime().StrictConfig() {
+		// Retired in OpenClaw 2026.9.3 (built-in default applies): its validator rejects the key.
+		if _, ok := compactionMap["reserveTokensFloor"]; ok {
+			delete(compactionMap, "reserveTokensFloor")
+			changed = true
+		}
+	} else if v, _ := compactionMap["reserveTokensFloor"].(float64); v != 5000 {
 		compactionMap["reserveTokensFloor"] = 5000
 		changed = true
 	}

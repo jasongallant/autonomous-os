@@ -137,9 +137,14 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 	sandboxMap := ensureMap(defaultsMap, "sandbox")
 	sandboxMap["mode"] = "off"
 	defaultsMap["sandbox"] = sandboxMap
+	strictConfig := openclawRuntime().StrictConfig()
 	compactionMap := ensureMap(defaultsMap, "compaction")
 	compactionMap["mode"] = "safeguard"
-	compactionMap["reserveTokensFloor"] = 80000
+	if strictConfig {
+		delete(compactionMap, "reserveTokensFloor")
+	} else {
+		compactionMap["reserveTokensFloor"] = 80000
+	}
 	defaultsMap["compaction"] = compactionMap
 	defaultsMap["bootstrapMaxChars"] = bootstrapMaxChars
 	defaultsMap["bootstrapTotalMaxChars"] = bootstrapTotalMaxChars
@@ -239,8 +244,15 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 	toolsMap["profile"] = "full"
 	execMap := ensureMap(toolsMap, "exec")
 	execMap["host"] = "gateway"
-	execMap["security"] = "full"
-	execMap["ask"] = "off"
+	if strictConfig {
+		// 2026.9.3 replaced security/ask with mode ("full" = security full + ask off) and rejects mixing them.
+		execMap["mode"] = "full"
+		delete(execMap, "security")
+		delete(execMap, "ask")
+	} else {
+		execMap["security"] = "full"
+		execMap["ask"] = "off"
+	}
 	toolsMap["exec"] = execMap
 	elevatedMap := ensureMap(toolsMap, "elevated")
 	elevatedMap["enabled"] = true
@@ -257,7 +269,11 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 		delete(messagesMap, "responsePrefix")
 	}
 	messagesMap["ackReactionScope"] = "all"
-	messagesMap["removeAckAfterReply"] = true
+	if strictConfig {
+		delete(messagesMap, "removeAckAfterReply")
+	} else {
+		messagesMap["removeAckAfterReply"] = true
+	}
 	configData["messages"] = messagesMap
 
 	slog.Debug("ensuring logging defaults", "component", "openclaw")
