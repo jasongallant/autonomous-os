@@ -1,6 +1,7 @@
 package http
 
 import (
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"sync"
@@ -97,10 +98,14 @@ type AgentHandler struct {
 	cronFireRunsMu sync.Mutex
 	cronFireRuns   map[string]bool
 
-	// cronFireExpected: FIFO of recent cron "started" timestamps (unix ms), consumed
-	// by the next UUID lifecycle_start within cronFireWindowMs.
+	// cronFireExpected: FIFO of recent cron "started" events, consumed by the next
+	// UUID lifecycle_start within cronFireWindowMs.
 	cronFireExpectedMu sync.Mutex
-	cronFireExpected   []int64
+	cronFireExpected   []cronFireSlot
+
+	// silentCronRuns: runs started by a plugin-declared maintenance cron (never spoken).
+	// Guarded by cronFireRunsMu.
+	silentCronRuns map[string]bool
 
 	// channelTurns: active channel-initiated turns keyed by sessionKey, driven from
 	// session.message because the gateway does not stream agent lifecycle for them.
@@ -159,6 +164,83 @@ type channelTurnState struct {
 // lifecycle_start (observed ~2s).
 const cronFireWindowMs int64 = 10_000
 
+// cronFireSlot is one cron "started" event awaiting its lifecycle_start. declaration is the
+// job's declarationKey: set for jobs a plugin declares (OpenClaw >= 2026.9 memory dreaming,
+// skill collection review, heartbeat), empty for jobs the user or agent scheduled.
+type cronFireSlot struct {
+	at          int64
+	jobID       string
+	declaration string
+}
+
+// silent reports whether the job is plugin-declared maintenance, whose output is not for the speaker.
+func (s cronFireSlot) silent() bool {
+	return s.declaration != ""
+}
+
+// parseCronStarted returns the slot for a cron "started" event payload, or ok=false for any other action.
+func parseCronStarted(payload []byte, now int64) (cronFireSlot, bool) {
+	var evt struct {
+		Action string `json:"action"`
+		JobID  string `json:"jobId"`
+		Job    struct {
+			DeclarationKey string `json:"declarationKey"`
+		} `json:"job"`
+	}
+	if err := json.Unmarshal(payload, &evt); err != nil || evt.Action != "started" {
+		return cronFireSlot{}, false
+	}
+	return cronFireSlot{at: now, jobID: evt.JobID, declaration: strings.TrimSpace(evt.Job.DeclarationKey)}, true
+}
+
+// expectCronFire queues a cron "started" slot, dropping slots older than cronFireWindowMs.
+func (h *AgentHandler) expectCronFire(slot cronFireSlot) {
+	h.cronFireExpectedMu.Lock()
+	defer h.cronFireExpectedMu.Unlock()
+	cutoff := slot.at - cronFireWindowMs
+	pruned := h.cronFireExpected[:0]
+	for _, s := range h.cronFireExpected {
+		if s.at >= cutoff {
+			pruned = append(pruned, s)
+		}
+	}
+	h.cronFireExpected = append(pruned, slot)
+}
+
+// claimCronFire gives the oldest live slot to a UUID run starting at now and marks the run:
+// a user cron is forced to the speaker, a plugin-declared one is kept off it.
+func (h *AgentHandler) claimCronFire(runID string, now int64) (cronFireSlot, bool) {
+	h.cronFireExpectedMu.Lock()
+	cutoff := now - cronFireWindowMs
+	idx := 0
+	for idx < len(h.cronFireExpected) && h.cronFireExpected[idx].at < cutoff {
+		idx++
+	}
+	h.cronFireExpected = h.cronFireExpected[idx:]
+	if len(h.cronFireExpected) == 0 {
+		h.cronFireExpectedMu.Unlock()
+		return cronFireSlot{}, false
+	}
+	slot := h.cronFireExpected[0]
+	h.cronFireExpected = h.cronFireExpected[1:]
+	h.cronFireExpectedMu.Unlock()
+
+	h.cronFireRunsMu.Lock()
+	defer h.cronFireRunsMu.Unlock()
+	if slot.silent() {
+		if h.silentCronRuns == nil {
+			h.silentCronRuns = make(map[string]bool)
+		}
+		h.silentCronRuns[runID] = true
+	} else {
+		if h.cronFireRuns == nil {
+			h.cronFireRuns = make(map[string]bool)
+		}
+		h.cronFireRuns[runID] = true
+	}
+	return slot, true
+}
+
 // ProvideAgentHandler returns an agent events handler.
 func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusled.Service, cfg *config.Config) *AgentHandler {
 	// Init before StartWS so ws_connect events reach SSE.
@@ -188,7 +270,8 @@ func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusl
 		channelRuns:          make(map[string]bool),
 		interleavedDMByRunID: make(map[string]string),
 		cronFireRuns:         make(map[string]bool),
-		channelTurns:         make(map[string]*channelTurnState),
+		silentCronRuns:       make(map[string]bool),
+		channelTurns:       make(map[string]*channelTurnState),
 		agentLifecycleAt:     make(map[string]int64),
 		activeRunIDBySession: make(map[string]string),
 		errorRecoveredRuns:   make(map[string]time.Time),

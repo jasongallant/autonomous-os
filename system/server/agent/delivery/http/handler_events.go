@@ -50,24 +50,9 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 	if evt.Event == "cron" {
 		// Diagnostic: keep until cron correlation is proven across all sessionTarget variants.
 		slog.Info("cron event raw payload", "component", "agent", "payload", string(evt.Payload))
-		var cronEvt struct {
-			Action  string `json:"action"`
-			JobID   string `json:"jobId"`
-			RunAtMs int64  `json:"runAtMs"`
-		}
-		if err := json.Unmarshal(evt.Payload, &cronEvt); err == nil && cronEvt.Action == "started" {
-			now := time.Now().UnixMilli()
-			h.cronFireExpectedMu.Lock()
-			cutoff := now - cronFireWindowMs
-			pruned := h.cronFireExpected[:0]
-			for _, ts := range h.cronFireExpected {
-				if ts >= cutoff {
-					pruned = append(pruned, ts)
-				}
-			}
-			h.cronFireExpected = append(pruned, now)
-			h.cronFireExpectedMu.Unlock()
-			slog.Info("cron started — expecting lifecycle_start", "component", "agent", "job_id", cronEvt.JobID, "run_at_ms", cronEvt.RunAtMs)
+		if slot, ok := parseCronStarted(evt.Payload, time.Now().UnixMilli()); ok {
+			h.expectCronFire(slot)
+			slog.Info("cron started — expecting lifecycle_start", "component", "agent", "job_id", slot.jobID, "declaration", slot.declaration, "silent", slot.silent())
 		}
 	}
 

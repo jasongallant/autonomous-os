@@ -121,30 +121,19 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		// within cronFireWindowMs. UUID runIds only, so device turns can't claim a cron slot.
 		if payload.Data.Phase == "start" && payload.RunID != "" && !isDeviceOutboundChatRunID(payload.RunID) {
 			now := time.Now().UnixMilli()
-			cutoff := now - cronFireWindowMs
-			h.cronFireExpectedMu.Lock()
-			idx := 0
-			for idx < len(h.cronFireExpected) && h.cronFireExpected[idx] < cutoff {
-				idx++
-			}
-			h.cronFireExpected = h.cronFireExpected[idx:]
-			if len(h.cronFireExpected) > 0 {
-				startedAt := h.cronFireExpected[0]
-				h.cronFireExpected = h.cronFireExpected[1:]
-				h.cronFireExpectedMu.Unlock()
-				h.cronFireRunsMu.Lock()
-				h.cronFireRuns[payload.RunID] = true
-				h.cronFireRunsMu.Unlock()
-				slog.Info("cron fire correlated — will force TTS", "component", "agent", "run_id", payload.RunID, "session", payload.SessionKey, "delta_ms", now-startedAt)
-				flow.Log("cron_fire", map[string]any{"run_id": payload.RunID, "delta_ms": now - startedAt}, payload.RunID)
-			} else {
-				h.cronFireExpectedMu.Unlock()
+			if slot, ok := h.claimCronFire(payload.RunID, now); ok {
+				if slot.silent() {
+					slog.Info("maintenance cron correlated — TTS suppressed", "component", "agent", "run_id", payload.RunID, "session", payload.SessionKey, "declaration", slot.declaration, "delta_ms", now-slot.at)
+				} else {
+					slog.Info("cron fire correlated — will force TTS", "component", "agent", "run_id", payload.RunID, "session", payload.SessionKey, "delta_ms", now-slot.at)
+				}
+				flow.Log("cron_fire", map[string]any{"run_id": payload.RunID, "delta_ms": now - slot.at, "declaration": slot.declaration}, payload.RunID)
 			}
 		}
 
 		// External channel turn: UUID run_id (not device-chat-*), excluding cron-fire turns.
 		h.cronFireRunsMu.Lock()
-		isCronFireTurn := h.cronFireRuns[payload.RunID]
+		isCronFireTurn := h.cronFireRuns[payload.RunID] || h.silentCronRuns[payload.RunID]
 		h.cronFireRunsMu.Unlock()
 		isChannelTurn := payload.Data.Phase == "start" && payload.RunID != "" &&
 			!isDeviceOutboundChatRunID(payload.RunID) && !isDeviceOutboundChatRunID(flowRunID) &&
@@ -880,8 +869,11 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				// Cron-fire turns always speak even though their UUIDs look like channel runs.
 				h.cronFireRunsMu.Lock()
 				isCronFire := h.cronFireRuns[payload.RunID] || h.cronFireRuns[flowRunID]
+				isSilentCron := h.silentCronRuns[payload.RunID] || h.silentCronRuns[flowRunID]
 				delete(h.cronFireRuns, payload.RunID)
 				delete(h.cronFireRuns, flowRunID)
+				delete(h.silentCronRuns, payload.RunID)
+				delete(h.silentCronRuns, flowRunID)
 				h.cronFireRunsMu.Unlock()
 				if isCronFire {
 					isChannelRun = false
@@ -891,8 +883,9 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				if isBroadcastRun || forceTTS {
 					isChannelRun = false
 				}
-				// Heartbeat cron responses must never reach the speaker.
-				if isHeartbeatRun {
+				// Heartbeat cron responses must never reach the speaker, nor plugin-declared
+				// maintenance crons (memory dreaming, skill collection review).
+				if isHeartbeatRun || isSilentCron {
 					isChannelRun = true
 				}
 				// A confirmed channel turn (senderLabel) always suppresses TTS.
@@ -909,7 +902,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				}
 				if isChannelRun {
 					// Channel users still get the text via OpenClaw's own fan-out.
-					slog.Info("assistant turn done, TTS suppressed (channel run)", "component", "agent", "text", text[:min(len(text), 100)], "broadcast", isBroadcastRun, "force_tts", forceTTS, "cron_fire", isCronFire, "heartbeat", isHeartbeatRun)
+					slog.Info("assistant turn done, TTS suppressed (channel run)", "component", "agent", "text", text[:min(len(text), 100)], "broadcast", isBroadcastRun, "force_tts", forceTTS, "cron_fire", isCronFire, "heartbeat", isHeartbeatRun, "silent_cron", isSilentCron)
 					flow.Log("tts_suppressed", map[string]any{"run_id": flowRunID, "reason": "channel_run", "text": text}, flowRunID)
 				} else {
 					// speak-queue pre-synthesises the remainder while sentence 1 plays; idle it acts like /voice/speak.
